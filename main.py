@@ -70,6 +70,90 @@ class ipv4Header:
         )
 
 
+class ipv6Header:
+    def __init__(self, version: int, trafficClass: int, flowLabel: int,
+                 payloadLength: int, nextHeader: int, hopLimit: int,
+                 source: str, destination: str):
+        self.version = version
+        self.trafficClass = trafficClass
+        self.flowLabel = flowLabel
+        self.payloadLength = payloadLength
+        self.nextHeader = nextHeader
+        self.hopLimit = hopLimit
+        self.source = source
+        self.destination = destination
+
+    def getNextHeader(self) -> str:
+        headers = {
+            0: "Hop-by-Hop Options", 6: "TCP", 17: "UDP",
+            43: "Routing", 44: "Fragment", 58: "ICMPv6",
+            60: "Destination Options"
+        }
+        return headers.get(self.nextHeader, "Unknown")
+
+    def __str__(self) -> str:
+        return (
+            "IPv6 Header\n"
+            f"  Version:              {self.version}\n"
+            f"  Traffic class:        {self.trafficClass}\n"
+            f"  Flow label:           0x{self.flowLabel:05x}\n"
+            f"  Payload length:       {self.payloadLength} bytes\n"
+            f"  Next header:          "
+            f"{self.getNextHeader()} ({self.nextHeader})\n"
+            f"  Hop limit:            {self.hopLimit}\n"
+            f"  Source address:       {self.source}\n"
+            f"  Destination address:  {self.destination}"
+        )
+
+
+class arpHeader:
+    def __init__(self, hardwareType: int, protocolType: int,
+                 hardwareLength: int, protocolLength: int,
+                 operation: int, senderHardware: str,
+                 senderProtocol: str, targetHardware: str,
+                 targetProtocol: str):
+        self.hardwareType = hardwareType
+        self.protocolType = protocolType
+        self.hardwareLength = hardwareLength
+        self.protocolLength = protocolLength
+        self.operation = operation
+        self.senderHardware = senderHardware
+        self.senderProtocol = senderProtocol
+        self.targetHardware = targetHardware
+        self.targetProtocol = targetProtocol
+
+    def getHardwareType(self) -> str:
+        if self.hardwareType == 1:
+            return "Ethernet"
+        return "Unknown"
+
+    def getProtocolType(self) -> str:
+        if self.protocolType == 0x0800:
+            return "IPv4"
+        return "Unknown"
+
+    def getOperation(self) -> str:
+        operations = {1: "Request", 2: "Reply"}
+        return operations.get(self.operation, "Unknown")
+
+    def __str__(self) -> str:
+        return (
+            "ARP Header\n"
+            f"  Hardware type:        "
+            f"{self.getHardwareType()} ({self.hardwareType})\n"
+            f"  Protocol type:        "
+            f"{self.getProtocolType()} (0x{self.protocolType:04x})\n"
+            f"  Hardware addr length: {self.hardwareLength} bytes\n"
+            f"  Protocol addr length: {self.protocolLength} bytes\n"
+            f"  Operation:            "
+            f"{self.getOperation()} ({self.operation})\n"
+            f"  Sender hardware addr: {self.senderHardware}\n"
+            f"  Sender protocol addr: {self.senderProtocol}\n"
+            f"  Target hardware addr: {self.targetHardware}\n"
+            f"  Target protocol addr: {self.targetProtocol}"
+        )
+
+
 class tcpHeader:
     def __init__(self, sourcePort: int, destinationPort: int,
                  sequenceNumber: int, acknowledgmentNumber: int,
@@ -121,10 +205,11 @@ class tcpHeader:
 
 class message:
     def __init__(self, ethernetHeader: ethernetIIHeader, ipHeader=None,
-                 tcpHeader=None):
+                 tcpHeader=None, arpHeader=None):
         self.ethernetHeader = ethernetHeader
         self.ipHeader = ipHeader
         self.tcpHeader = tcpHeader
+        self.arpHeader = arpHeader
 
 
 
@@ -206,6 +291,111 @@ def processIPv4Header(data: list[int]) -> ipv4Header:
     return header
 
 
+def processIPv6Header(data: list[int]) -> ipv6Header:
+    # Verify minimum IPv6 header size
+    if len(data) < 40:
+        raise ValueError("Packet is too short to contain an IPv6 header.")
+
+    # Process version, traffic class, and flow label
+    version = data[0] >> 4
+    trafficClass = ((data[0] & 0x0f) << 4) | (data[1] >> 4)
+    flowLabel = ((data[1] & 0x0f) << 16) | int.from_bytes(data[2:4], "big")
+
+    # Verify IPv6 version
+    if version != 6:
+        raise ValueError(f"Expected IPv6 version 6, but found {version}.")
+
+    # Process payload length, next header, and hop limit
+    payloadLength = int.from_bytes(data[4:6], "big")
+    nextHeader = data[6]
+    hopLimit = data[7]
+
+    # Process source and destination IP addresses
+    source = processIPv6Address(data[8:24])
+    destination = processIPv6Address(data[24:40])
+
+    # Init IPv6 header
+    header = ipv6Header(
+        version, trafficClass, flowLabel, payloadLength, nextHeader,
+        hopLimit, source, destination
+    )
+
+    # Remove IPv6 header from byte data
+    del data[:40]
+    return header
+
+
+def processIPv6Address(data: list[int]) -> str:
+    # Combine each pair of bytes into an IPv6 address section
+    sections = list()
+    for i in range(0, 16, 2):
+        section = (data[i] << 8) | data[i + 1]
+        sections.append(format(section, "x"))
+    return ":".join(sections)
+
+
+def processARPHeader(data: list[int]) -> arpHeader:
+    # Verify minimum ARP header size
+    if len(data) < 8:
+        raise ValueError("Packet is too short to contain an ARP header.")
+
+    # Process hardware and protocol types
+    hardwareType = int.from_bytes(data[0:2], "big")
+    protocolType = int.from_bytes(data[2:4], "big")
+
+    # Process address lengths and operation
+    hardwareLength = data[4]
+    protocolLength = data[5]
+    operation = int.from_bytes(data[6:8], "big")
+    headerLength = 8 + (2 * hardwareLength) + (2 * protocolLength)
+
+    # Verify complete ARP header size
+    if len(data) < headerLength:
+        raise ValueError("Packet ends before the ARP header is complete.")
+
+    # Process sender and target addresses
+    index = 8
+    senderHardwareBytes = data[index:index + hardwareLength]
+    index += hardwareLength
+    senderProtocolBytes = data[index:index + protocolLength]
+    index += protocolLength
+    targetHardwareBytes = data[index:index + hardwareLength]
+    index += hardwareLength
+    targetProtocolBytes = data[index:index + protocolLength]
+
+    # Format hardware and protocol addresses
+    senderHardware = ":".join(
+        format(byte, "02x") for byte in senderHardwareBytes
+    )
+    targetHardware = ":".join(
+        format(byte, "02x") for byte in targetHardwareBytes
+    )
+    senderProtocol = processProtocolAddress(
+        senderProtocolBytes, protocolType
+    )
+    targetProtocol = processProtocolAddress(
+        targetProtocolBytes, protocolType
+    )
+
+    # Init ARP header
+    header = arpHeader(
+        hardwareType, protocolType, hardwareLength, protocolLength,
+        operation, senderHardware, senderProtocol, targetHardware,
+        targetProtocol
+    )
+
+    # Remove ARP header from byte data
+    del data[:headerLength]
+    return header
+
+
+def processProtocolAddress(data: list[int], protocolType: int) -> str:
+    # Format IPv4 addresses in dotted decimal notation
+    if protocolType == 0x0800 and len(data) == 4:
+        return ".".join(str(byte) for byte in data)
+    return " ".join(format(byte, "02x") for byte in data)
+
+
 def processTCPHeader(data: list[int]) -> tcpHeader:
     # Verify minimum TCP header size
     if len(data) < 20:
@@ -278,6 +468,7 @@ def main():
             # Process IPv4 header for IPv4 packets
             ipHeader = None
             tcpHeader = None
+            arpPacketHeader = None
             if ethernetHeader.type == 0x0800:
                 ipHeader = processIPv4Header(data)
                 print(ipHeader)
@@ -286,14 +477,30 @@ def main():
                 if ipHeader.protocol == 6 and ipHeader.fragmentOffset == 0:
                     tcpHeader = processTCPHeader(data)
                     print(tcpHeader)
+
+            # Process ARP header for ARP packets
+            elif ethernetHeader.type == 0x0806:
+                arpPacketHeader = processARPHeader(data)
+                print(arpPacketHeader)
+
+            # Process IPv6 header for IPv6 packets
+            elif ethernetHeader.type == 0x86dd:
+                ipHeader = processIPv6Header(data)
+                print(ipHeader)
+
+                # Process TCP header when it directly follows IPv6
+                if ipHeader.nextHeader == 6:
+                    tcpHeader = processTCPHeader(data)
+                    print(tcpHeader)
             else:
-                # NOTE: double check if IPv6 and ARP packets need to be processed
-                print("IPv4 and TCP processing skipped for this frame.")
+                print("Unsupported Ethernet frame type.")
 
             print()
 
             # Add message to list
-            messages.append(message(ethernetHeader, ipHeader, tcpHeader))
+            messages.append(message(
+                ethernetHeader, ipHeader, tcpHeader, arpPacketHeader
+            ))
 
             # Incrament to next message
             message_number+=1
