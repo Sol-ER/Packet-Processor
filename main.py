@@ -1,6 +1,8 @@
 # CSCI.351.01 - Data Comm & Networks
 # Programming Part 1
 # George Scheper, Ethan Ricker, Ricky Leung
+from tensorflow.python.framework.test_ops import none_eager_fallback
+
 
 class ethernetIIHeader:
     def __init__(self, dst:str, src:str, type:int):
@@ -46,10 +48,61 @@ class ipv4Header:
         protocols = {1: "ICMP", 6: "TCP", 17: "UDP"}
         return protocols.get(self.protocol, "Unknown")
 
+    def calculate_checksum(self) -> str:
+        src_bytes = [int(octet) for octet in self.source.split(".")]
+        dst_bytes = [int(octet) for octet in self.destination.split(".")]
+
+        ver_ihl = (self.version << 4) | (self.ihl & 0x0F)
+        tos = (self.dscp << 2) | (self.ecn & 0x03)
+        flags_fragment = ((self.flags & 0x07) << 13) | (
+                self.fragmentOffset & 0x1FFF
+        )
+
+        header_bytes = bytearray(
+            [
+                ver_ihl,
+                tos,
+                self.totalLength >> 8,
+                self.totalLength & 0xFF,
+                self.identification >> 8,
+                self.identification & 0xFF,
+                flags_fragment >> 8,
+                flags_fragment & 0xFF,
+                self.ttl,
+                self.protocol,
+                0,
+                0,  # Checksum bytes set to 0
+                src_bytes[0],
+                src_bytes[1],
+                src_bytes[2],
+                src_bytes[3],
+                dst_bytes[0],
+                dst_bytes[1],
+                dst_bytes[2],
+                dst_bytes[3],
+            ]
+        )
+
+        if self.options:
+            header_bytes.extend(self.options)
+        checksum_sum = 0
+        for i in range(0, len(header_bytes), 2):
+            word = (header_bytes[i] << 8) + header_bytes[i + 1]
+            checksum_sum += word
+        while checksum_sum >> 16:
+            checksum_sum = (checksum_sum & 0xFFFF) + (checksum_sum >> 16)
+        final_checksum = ~checksum_sum & 0xFFFF
+        return f"{final_checksum:04x}"
+
+    def verify_checksum(self) -> bool:
+        return f"{self.checksum:04x}" == self.calculate_checksum()
+
     def __str__(self) -> str:
         options = "None"
         if self.options:
             options = " ".join(format(byte, "02x") for byte in self.options)
+
+        is_valid = self.verify_checksum()
 
         return (
             "IPv4 Header\n"
@@ -66,7 +119,9 @@ class ipv4Header:
             f"  Header checksum:      0x{self.checksum:04x}\n"
             f"  Source address:       {self.source}\n"
             f"  Destination address:  {self.destination}\n"
-            f"  Options:              {options}"
+            f"  Options:              {options}\n"
+            f"  Calculated checksum   0x{self.calculate_checksum()}\n"
+            f"  {'Calculated checksum matches given checksum' if is_valid else 'Calculated checksum does not match given checksum'}\n"
         )
 
 
@@ -172,6 +227,8 @@ class tcpHeader:
         self.checksum = checksum
         self.urgentPointer = urgentPointer
         self.options = options
+        self.src_ip = None
+        self.dest_ip = None
 
     def getFlags(self) -> str:
         flagNames = (
@@ -182,10 +239,57 @@ class tcpHeader:
         enabled = [name for mask, name in flagNames if self.flags & mask]
         return ", ".join(enabled) if enabled else "None"
 
+    def calculate_checksum(self, payload_bytes: bytes = b"") -> str:
+        src_bytes = [int(octet) for octet in self.src_ip.split(".")]
+        dest_bytes = [int(octet) for octet in self.dest_ip.split(".")]
+        data_offset_reserved_ns = (self.dataOffset << 12) | ((self.reserved & 0x07) << 9) | (self.flags & 0x1FF)
+
+        tcp_header_bytes = bytearray([
+            self.sourcePort >> 8, self.sourcePort & 0xFF,
+            self.destinationPort >> 8, self.destinationPort & 0xFF,
+            self.sequenceNumber >> 24 & 0xFF, (self.sequenceNumber >> 16) & 0xFF, (self.sequenceNumber >> 8) & 0xFF,
+            self.sequenceNumber & 0xFF,
+            (self.acknowledgmentNumber >> 24) & 0xFF, (self.acknowledgmentNumber >> 16) & 0xFF,
+            (self.acknowledgmentNumber >> 8) & 0xFF, self.acknowledgmentNumber & 0xFF,
+            data_offset_reserved_ns >> 8, data_offset_reserved_ns & 0xFF,
+            self.windowSize >> 8, self.windowSize & 0xFF,
+            0, 0,  # Checksum bytes set to 0 for calculation
+            self.urgentPointer >> 8, self.urgentPointer & 0xFF
+        ])
+
+        if self.options:
+            tcp_header_bytes.extend(self.options)
+        tcp_segment = bytes(tcp_header_bytes) + payload_bytes
+        tcp_length = len(tcp_segment)
+        pseudo_header = bytearray([
+            src_bytes[0], src_bytes[1], src_bytes[2], src_bytes[3],
+            dest_bytes[0], dest_bytes[1], dest_bytes[2], dest_bytes[3],
+            0,  # Reserved / Zero
+            6,  # Protocol (6 for TCP)
+            tcp_length >> 8, tcp_length & 0xFF
+        ])
+
+        full_payload = bytes(pseudo_header) + tcp_segment
+        if len(full_payload) % 2 != 0:
+            full_payload += b'\x00'
+        checksum_sum = 0
+        for i in range(0, len(full_payload), 2):
+            word = (full_payload[i] << 8) + full_payload[i + 1]
+            checksum_sum += word
+        while checksum_sum >> 16:
+            checksum_sum = (checksum_sum & 0xFFFF) + (checksum_sum >> 16)
+        final_checksum = ~checksum_sum & 0xFFFF
+        return f"{final_checksum:04x}"
+
+    def verify_checksum(self, payload_bytes: bytes = b"") -> bool:
+        return f"{self.checksum:04x}" == self.calculate_checksum(payload_bytes)
+
     def __str__(self) -> str:
         options = "None"
         if self.options:
             options = " ".join(format(byte, "02x") for byte in self.options)
+
+        is_valid = self.verify_checksum()
 
         return (
             "TCP Header\n"
@@ -199,7 +303,9 @@ class tcpHeader:
             f"  Window size:          {self.windowSize}\n"
             f"  Checksum:             0x{self.checksum:04x}\n"
             f"  Urgent pointer:       {self.urgentPointer}\n"
-            f"  Options:              {options}"
+            f"  Options:              {options}\n"
+            f"  Calculated checksum   0x{self.calculate_checksum()}\n"
+            f"  {'Calculated checksum matches given checksum' if is_valid else 'Calculated checksum does not match given checksum'}\n"
         )
 
 
@@ -476,6 +582,8 @@ def main():
                 # Process TCP header for TCP packets
                 if ipHeader.protocol == 6 and ipHeader.fragmentOffset == 0:
                     tcpHeader = processTCPHeader(data)
+                    tcpHeader.src_ip = ipHeader.source
+                    tcpHeader.dest_ip = ipHeader.destination
                     print(tcpHeader)
 
             # Process ARP header for ARP packets
