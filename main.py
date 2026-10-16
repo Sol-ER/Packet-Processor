@@ -1,3 +1,6 @@
+import sys # This import is included in every Python 3 installation so it should work
+
+
 # CSCI.351.01 - Data Comm & Networks
 # Programming Part 1
 # George Scheper, Ethan Ricker, Ricky Leung
@@ -9,14 +12,23 @@ class ethernetIIHeader:
         self.type = type
 
     def __str__(self):
-        return f"destination: {self.etherdst}\tsource: {self.ethersrc}\ttype: {self.getEtherType()}"
+        return (
+            "Ethernet Header\n"
+            f"  Destination address:  {self.etherdst}\n"
+            f"  Source address:       {self.ethersrc}\n"
+            f"  Length/Type:          {self.getEtherType()}"
+        )
 
     def getEtherType(self) -> str:
-        typeHex = hex(self.type)
-        if (typeHex == "0x800"): return "IPv4"
-        elif (typeHex == "0x806"): return "ARP"
-        elif (typeHex == "0x86dd"): return "IPv6"
-        return f"type \"{typeHex}\" not listed"
+        if self.type <= 1500:
+            return f"IEEE 802.3 payload length ({self.type} bytes)"
+        elif self.type == 0x0800:
+            return "IPv4"
+        elif self.type == 0x0806:
+            return "ARP"
+        elif self.type == 0x86dd:
+            return "IPv6"
+        return f"type \"0x{self.type:04x}\" not listed"
 
 
 
@@ -119,7 +131,7 @@ class ipv4Header:
             f"  Destination address:  {self.destination}\n"
             f"  Options:              {options}\n"
             f"  Calculated checksum   0x{self.calculate_checksum()}\n"
-            f"  {'Calculated checksum matches given checksum' if is_valid else 'Calculated checksum does not match given checksum'}\n"
+            f"  {'Calculated checksum matches given checksum' if is_valid else 'Calculated checksum does not match given checksum'}"
         )
 
 
@@ -205,6 +217,47 @@ class arpHeader:
             f"  Target hardware addr: {self.targetHardware}\n"
             f"  Target protocol addr: {self.targetProtocol}"
         )
+
+
+class ieee8022Header:
+    def __init__(self, payloadLength: int, dsap: int, ssap: int,
+                 control: int, controlLength: int, oui=None,
+                 protocolId=None):
+        self.payloadLength = payloadLength
+        self.dsap = dsap
+        self.ssap = ssap
+        self.control = control
+        self.controlLength = controlLength
+        self.oui = oui
+        self.protocolId = protocolId
+
+    def getProtocol(self) -> str:
+        if self.dsap == 0x42 and self.ssap == 0x42:
+            return "Spanning Tree Protocol"
+        elif self.oui == 0x00000c and self.protocolId == 0x2000:
+            return "Cisco Discovery Protocol"
+        elif self.dsap == 0xaa and self.ssap == 0xaa:
+            return "SNAP"
+        return "Unknown"
+
+    def __str__(self) -> str:
+        output = (
+            "IEEE 802.2 LLC Header\n"
+            f"  Payload length:       {self.payloadLength} bytes\n"
+            f"  Destination SAP:      0x{self.dsap:02x}\n"
+            f"  Source SAP:           0x{self.ssap:02x}\n"
+            f"  Control:              "
+            f"0x{self.control:0{self.controlLength * 2}x}\n"
+            f"  Protocol:             {self.getProtocol()}"
+        )
+
+        # Include SNAP fields when the LLC header contains them
+        if self.oui is not None and self.protocolId is not None:
+            output += (
+                f"\n  Organization ID:      0x{self.oui:06x}\n"
+                f"  Protocol ID:          0x{self.protocolId:04x}"
+            )
+        return output
 
 
 class tcpHeader:
@@ -303,17 +356,18 @@ class tcpHeader:
             f"  Urgent pointer:       {self.urgentPointer}\n"
             f"  Options:              {options}\n"
             f"  Calculated checksum   0x{self.calculate_checksum()}\n"
-            f"  {'Calculated checksum matches given checksum' if is_valid else 'Calculated checksum does not match given checksum'}\n"
+            f"  {'Calculated checksum matches given checksum' if is_valid else 'Calculated checksum does not match given checksum'}"
         )
 
 
 class message:
     def __init__(self, ethernetHeader: ethernetIIHeader, ipHeader=None,
-                 tcpHeader=None, arpHeader=None):
+                 tcpHeader=None, arpHeader=None, llcHeader=None):
         self.ethernetHeader = ethernetHeader
         self.ipHeader = ipHeader
         self.tcpHeader = tcpHeader
         self.arpHeader = arpHeader
+        self.llcHeader = llcHeader
 
 
 
@@ -338,6 +392,51 @@ def processEthernetHeader(data:list[int]):
 
     # Init ethernet headers
     return ethernetIIHeader(dst, src, type)
+
+
+def processIEEE8022Header(data: list[int],
+                          payloadLength: int) -> ieee8022Header:
+    # Verify minimum IEEE 802.2 LLC header size
+    if payloadLength < 3 or len(data) < 3:
+        raise ValueError("Packet is too short to contain an LLC header.")
+    if len(data) < payloadLength:
+        raise ValueError("Packet ends before the 802.3 payload is complete.")
+
+    # Process destination and source service access points
+    dsap = data[0]
+    ssap = data[1]
+
+    # Process one-byte or two-byte LLC control field
+    if data[2] & 0x03 == 0x03:
+        control = data[2]
+        controlLength = 1
+    else:
+        if payloadLength < 4 or len(data) < 4:
+            raise ValueError("Packet ends before the LLC control field.")
+        control = int.from_bytes(data[2:4], "big")
+        controlLength = 2
+
+    headerLength = 2 + controlLength
+    oui = None
+    protocolId = None
+
+    # Process SNAP organization and protocol identifiers
+    if dsap == 0xaa and ssap == 0xaa and control == 0x03:
+        if payloadLength < 8 or len(data) < 8:
+            raise ValueError("Packet ends before the SNAP header is complete.")
+        oui = int.from_bytes(data[3:6], "big")
+        protocolId = int.from_bytes(data[6:8], "big")
+        headerLength = 8
+
+    # Init IEEE 802.2 LLC header
+    header = ieee8022Header(
+        payloadLength, dsap, ssap, control, controlLength, oui,
+        protocolId
+    )
+
+    # Remove LLC and SNAP header bytes from byte data
+    del data[:headerLength]
+    return header
 
 
 def processIPv4Header(data: list[int]) -> ipv4Header:
@@ -548,15 +647,18 @@ def processTCPHeader(data: list[int]) -> tcpHeader:
 
 
 
-def main():
+def main(inputFile: str):
     messages = list()
 
-    with open("input.txt", "r") as file:
+    with open(inputFile, "r") as file:
         # Read content
         content = file.read().split("\n")
         message_number = 1
 
         while(content[message_number*4 - 4]):
+            # Process packet description
+            packetDescription = content[message_number*4 - 3].strip()
+
             # Parse byte data
             data = content[message_number*4 - 2]    # Second line is byte array
             data = data[1:-1]                       # Crop out prefix and suffix
@@ -565,15 +667,30 @@ def main():
             data.remove("0")                        # Remove preamble
             data = list(int(i, 16) for i in data)   # Create list of ints from base-16 strings
 
+            # Display packet number and description
+            print("=" * 70)
+            print(f"Packet {message_number}: {packetDescription}")
+            print("=" * 70)
+
             # Process ethernet header
             ethernetHeader = processEthernetHeader(data)
             print(ethernetHeader)
 
-            # Process IPv4 header for IPv4 packets
+            # Init remaining packet headers
             ipHeader = None
             tcpHeader = None
             arpPacketHeader = None
-            if ethernetHeader.type == 0x0800:
+            llcHeader = None
+
+            # Process IEEE 802.2 header for length-based frames
+            if ethernetHeader.type <= 1500:
+                llcHeader = processIEEE8022Header(
+                    data, ethernetHeader.type
+                )
+                print(llcHeader)
+
+            # Process IPv4 header for IPv4 packets
+            elif ethernetHeader.type == 0x0800:
                 ipHeader = processIPv4Header(data)
                 print(ipHeader)
 
@@ -601,11 +718,13 @@ def main():
             else:
                 print("Unsupported Ethernet frame type.")
 
-            print()
+            # Separate each packet with three blank lines
+            print("\n\n\n", end="")
 
             # Add message to list
             messages.append(message(
-                ethernetHeader, ipHeader, tcpHeader, arpPacketHeader
+                ethernetHeader, ipHeader, tcpHeader, arpPacketHeader,
+                llcHeader
             ))
 
             # Incrament to next message
@@ -614,4 +733,21 @@ def main():
 
 
 if __name__=="__main__":
-    main()
+    # Verify one input file was provided
+    if len(sys.argv) != 2:
+        print(f"Usage: python3 {sys.argv[0]} <input_file>")
+        print(f"Example: python3 {sys.argv[0]} input.txt")
+        raise SystemExit(1)
+
+    # Process the input file and report file access errors
+    try:
+        main(sys.argv[1])
+    except FileNotFoundError:
+        print(f'Error: File "{sys.argv[1]}" was not found.')
+        raise SystemExit(1)
+    except PermissionError:
+        print(f'Error: Permission denied for file "{sys.argv[1]}".')
+        raise SystemExit(1)
+    except OSError as error:
+        print(f'Error: Could not read file "{sys.argv[1]}": {error}')
+        raise SystemExit(1)
