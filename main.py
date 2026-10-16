@@ -1,8 +1,6 @@
 # CSCI.351.01 - Data Comm & Networks
 # Programming Part 1
 # George Scheper, Ethan Ricker, Ricky Leung
-from tensorflow.python.framework.test_ops import none_eager_fallback
-
 
 class ethernetIIHeader:
     def __init__(self, dst:str, src:str, type:int):
