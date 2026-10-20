@@ -5,7 +5,20 @@ import sys # This import is included in every Python 3 installation so it should
 # Programming Part 1
 # George Scheper, Ethan Ricker, Ricky Leung
 
+# Sources
+# Title                                 Link
+# RFC 791                               https://www.rfc-editor.org/info/rfc791/
+# RFC 9293                              https://www.rfc-editor.org/info/rfc9293/
+# Network Math - the Mighty Checksum!   https://www.youtube.com/watch?v=7LniwyiH0SM
+# RFC 8200                              https://www.rfc-editor.org/info/rfc8200/
+# RFC 826                               https://www.rfc-editor.org/info/rfc826/
+
 class ethernetIIHeader:
+    """Ethernet II header.
+
+    This class represents the ethernet header, either Ethernet II or 802.3.
+    """
+
     def __init__(self, dst:str, src:str, type:int):
         self.etherdst = dst
         self.ethersrc = src
@@ -31,8 +44,11 @@ class ethernetIIHeader:
         return f"type \"0x{self.type:04x}\" not listed"
 
 
-
 class ipv4Header:
+    """ipv4 header.
+
+    This class represents the IPv4 header, if it's available.
+    """
     def __init__(self, version: int, ihl: int, dscp: int, ecn: int,
                  totalLength: int, identification: int, flags: int,
                  fragmentOffset: int, ttl: int, protocol: int,
@@ -136,6 +152,10 @@ class ipv4Header:
 
 
 class ipv6Header:
+    """ipv6 header.
+
+    This class represents the IPv6 header, if it's available.
+    """
     def __init__(self, version: int, trafficClass: int, flowLabel: int,
                  payloadLength: int, nextHeader: int, hopLimit: int,
                  source: str, destination: str):
@@ -172,6 +192,10 @@ class ipv6Header:
 
 
 class arpHeader:
+    """ARP header.
+
+    This class represents the ARP header from an ARP request.
+    """
     def __init__(self, hardwareType: int, protocolType: int,
                  hardwareLength: int, protocolLength: int,
                  operation: int, senderHardware: str,
@@ -220,6 +244,11 @@ class arpHeader:
 
 
 class ieee8022Header:
+    """IEEE 802.2 header.
+
+    This class represents the 802.2 header, it contains the fields 
+    related to that area of the frame.
+    """
     def __init__(self, payloadLength: int, dsap: int, ssap: int,
                  control: int, controlLength: int, oui=None,
                  protocolId=None):
@@ -261,6 +290,10 @@ class ieee8022Header:
 
 
 class tcpHeader:
+    """TCP header.
+
+    This class represents the TCP header in a TCP request.
+    """
     def __init__(self, sourcePort: int, destinationPort: int,
                  sequenceNumber: int, acknowledgmentNumber: int,
                  dataOffset: int, reserved: int, flags: int,
@@ -361,6 +394,11 @@ class tcpHeader:
 
 
 class message:
+    """The cummulative message.
+
+    All the headers involved in a packet. Some may be omitted if they 
+    are not present.
+    """
     def __init__(self, ethernetHeader: ethernetIIHeader, ipHeader=None,
                  tcpHeader=None, arpHeader=None, llcHeader=None):
         self.ethernetHeader = ethernetHeader
@@ -370,8 +408,18 @@ class message:
         self.llcHeader = llcHeader
 
 
-
 def processEthernetHeader(data:list[int]):
+    """Processes the ethernet header data.
+
+    Take the data from the input file and parse into an instance of the
+    ethernet header class.
+
+    Arguments:
+    data -- The data containing the ethernet header information.
+
+    Returns:
+    An instance of the ethernet class
+    """
     # Process ethernet destination address
     dst = ""
     for i in range(6):
@@ -396,6 +444,18 @@ def processEthernetHeader(data:list[int]):
 
 def processIEEE8022Header(data: list[int],
                           payloadLength: int) -> ieee8022Header:
+    """Processes the IEEE 802.2 header data.
+
+    Take the data from the input file and payload length and return an 
+    instance of the 802.2 header.
+
+    Arguments:
+    data -- The data containing the ethernet header information.
+    payloadLength -- Length of the data being processed.
+
+    Returns:
+    An instance of the 802.2 class
+    """
     # Verify minimum IEEE 802.2 LLC header size
     if payloadLength < 3 or len(data) < 3:
         raise ValueError("Packet is too short to contain an LLC header.")
@@ -440,6 +500,17 @@ def processIEEE8022Header(data: list[int],
 
 
 def processIPv4Header(data: list[int]) -> ipv4Header:
+    """Processes the IPv4 information.
+
+    Take the data from the input file and return an instance of the
+    IPv4 header.
+
+    Arguments:
+    data -- The data containing the IPv4 header information.
+
+    Returns:
+    An instance of the IPv4 class
+    """
     # Verify minimum IPv4 header size
     if len(data) < 20:
         raise ValueError("Packet is too short to contain an IPv4 header.")
@@ -495,6 +566,17 @@ def processIPv4Header(data: list[int]) -> ipv4Header:
 
 
 def processIPv6Header(data: list[int]) -> ipv6Header:
+    """Processes the IPv6 information.
+
+    Take the data from the input file and return an instance of the
+    IPv6 header.
+
+    Arguments:
+    data -- The data containing the IPv6 header information.
+
+    Returns:
+    An instance of the IPv6 class
+    """
     # Verify minimum IPv6 header size
     if len(data) < 40:
         raise ValueError("Packet is too short to contain an IPv6 header.")
@@ -529,6 +611,17 @@ def processIPv6Header(data: list[int]) -> ipv6Header:
 
 
 def processIPv6Address(data: list[int]) -> str:
+    """Processes an IPv6 address.
+
+    Take the data from the input file and return a string
+    representation of an IPv6 address.
+
+    Arguments:
+    data -- The data containing the IPv6 address information.
+
+    Returns:
+    A string representation of an IPv6 address
+    """
     # Combine each pair of bytes into an IPv6 address section
     sections = list()
     for i in range(0, 16, 2):
@@ -538,6 +631,17 @@ def processIPv6Address(data: list[int]) -> str:
 
 
 def processARPHeader(data: list[int]) -> arpHeader:
+    """Processes the ARP header information.
+
+    Take the data from the input file and return a class representation
+    of the ARP header.
+
+    Arguments:
+    data -- The data containing the ARP header information.
+
+    Returns:
+    An ARP header class
+    """
     # Verify minimum ARP header size
     if len(data) < 8:
         raise ValueError("Packet is too short to contain an ARP header.")
@@ -593,6 +697,19 @@ def processARPHeader(data: list[int]) -> arpHeader:
 
 
 def processProtocolAddress(data: list[int], protocolType: int) -> str:
+    """Processes a protocol address.
+
+    Take the data from the input file and the protocol type as an
+    integer and return a string representation of a protocol 
+    address.
+
+    Arguments:
+    data -- The data containing the procol address information.
+    protocolType -- The type of protocol being represented.
+
+    Returns:
+    A string representation of the protocol address.
+    """
     # Format IPv4 addresses in dotted decimal notation
     if protocolType == 0x0800 and len(data) == 4:
         return ".".join(str(byte) for byte in data)
@@ -600,6 +717,17 @@ def processProtocolAddress(data: list[int], protocolType: int) -> str:
 
 
 def processTCPHeader(data: list[int]) -> tcpHeader:
+    """Processes a TCP header.
+
+    Take the data from the input file and return a class representation
+    of the TCP header.
+
+    Arguments:
+    data -- The data containing the TCP header information.
+
+    Returns:
+    A class representation of the TCP header.
+    """
     # Verify minimum TCP header size
     if len(data) < 20:
         raise ValueError("Packet is too short to contain a TCP header.")
@@ -648,6 +776,16 @@ def processTCPHeader(data: list[int]) -> tcpHeader:
 
 
 def main(inputFile: str):
+    """Given an input file, process the network headers one by one
+
+    Given a text file input, read each network packet into the buffer
+    one by one. After parsing, sequentially pop each byte and add it 
+    to its respective header. Once complete, print out the 
+    information in an orderly fasion.
+
+    Arguments:
+    inputFile -- The path to a txt file to parse.
+    """
     messages = list()
 
     with open(inputFile, "r") as file:
