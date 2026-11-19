@@ -400,12 +400,50 @@ class message:
     are not present.
     """
     def __init__(self, ethernetHeader: ethernetIIHeader, ipHeader=None,
-                 tcpHeader=None, arpHeader=None, llcHeader=None):
+                 tcpHeader=None, arpHeader=None, llcHeader=None,
+                 packetNumber=0, packetDescription="",
+                 timestampSeconds=0.0, frameLength=0):
         self.ethernetHeader = ethernetHeader
         self.ipHeader = ipHeader
         self.tcpHeader = tcpHeader
         self.arpHeader = arpHeader
         self.llcHeader = llcHeader
+        self.packetNumber = packetNumber
+        self.packetDescription = packetDescription
+        self.timestampSeconds = timestampSeconds
+        self.frameLength = frameLength
+
+
+def processPacketTimestamp(packetDescription: str) -> float:
+    """Processes a packet timestamp.
+
+    Take the timestamp from a packet description and return the number
+    of seconds since midnight. Fractional seconds are preserved for
+    later packets-per-second statistics.
+
+    Arguments:
+    packetDescription -- The description containing the timestamp.
+
+    Returns:
+    The timestamp as seconds since midnight.
+    """
+    # Separate the clock time from the fractional second groups
+    timestamp = packetDescription.split()[0]
+    timestampParts = timestamp.split(",")
+    clockParts = timestampParts[0].split(":")
+
+    # Convert hours, minutes, and seconds to seconds since midnight
+    hours = int(clockParts[0])
+    minutes = int(clockParts[1])
+    seconds = int(clockParts[2])
+    timestampSeconds = (hours * 3600) + (minutes * 60) + seconds
+
+    # Convert all comma-separated fractional groups to a decimal value
+    if len(timestampParts) > 1:
+        fractionDigits = "".join(timestampParts[1:])
+        timestampSeconds += int(fractionDigits) / (10 ** len(fractionDigits))
+
+    return timestampSeconds
 
 
 def processEthernetHeader(data:list[int]):
@@ -796,6 +834,7 @@ def main(inputFile: str):
         while(content[message_number*4 - 4]):
             # Process packet description
             packetDescription = content[message_number*4 - 3].strip()
+            timestampSeconds = processPacketTimestamp(packetDescription)
 
             # Parse byte data
             data = content[message_number*4 - 2]    # Second line is byte array
@@ -804,6 +843,7 @@ def main(inputFile: str):
             data = data.split("|")                  # Split data at seperator
             data.remove("0")                        # Remove preamble
             data = list(int(i, 16) for i in data)   # Create list of ints from base-16 strings
+            frameLength = len(data)                  # Save original frame size
 
             # Display packet number and description
             print("=" * 70)
@@ -862,11 +902,14 @@ def main(inputFile: str):
             # Add message to list
             messages.append(message(
                 ethernetHeader, ipHeader, tcpHeader, arpPacketHeader,
-                llcHeader
+                llcHeader, message_number, packetDescription,
+                timestampSeconds, frameLength
             ))
 
             # Incrament to next message
             message_number+=1
+
+    return messages
 
 
 
