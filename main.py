@@ -13,6 +13,71 @@ import sys # This import is included in every Python 3 installation so it should
 # RFC 8200                              https://www.rfc-editor.org/info/rfc8200/
 # RFC 826                               https://www.rfc-editor.org/info/rfc826/
 
+
+MAX_16_BIT_VALUE = 0xffff
+
+
+def parseNumber(numberText: str) -> int:
+    """Convert supported user input into an integer.
+
+    Binary input must begin with 0b, hexadecimal input must begin with
+    0x, and input without a prefix is interpreted as base 10.
+
+    Arguments:
+    numberText -- The number entered by the user.
+
+    Returns:
+    The number as an integer between 0 and 65535.
+    """
+    numberText = numberText.strip().lower()
+
+    # Determine the input base from its prefix
+    if numberText.startswith("0b"):
+        digits = numberText[2:]
+        base = 2
+        validDigits = "01"
+    elif numberText.startswith("0x"):
+        digits = numberText[2:]
+        base = 16
+        validDigits = "0123456789abcdef"
+    else:
+        digits = numberText
+        base = 10
+        validDigits = "0123456789"
+
+    # Verify the number contains digits valid for its base
+    if not digits or any(digit not in validDigits for digit in digits):
+        raise ValueError(
+            "Enter a decimal number, or use the 0b or 0x prefix."
+        )
+
+    value = int(digits, base)
+
+    # Limit the converter to an unsigned two-byte value
+    if value > MAX_16_BIT_VALUE:
+        raise ValueError("The number must be between 0 and 65535.")
+
+    return value
+
+
+def formatConversion(numberText: str) -> str:
+    """Format a number as 16-bit binary, hexadecimal, and base 10.
+
+    Arguments:
+    numberText -- The binary, hexadecimal, or decimal input.
+
+    Returns:
+    A formatted string containing all three representations.
+    """
+    value = parseNumber(numberText)
+
+    return (
+        f"Binary:      0b{value:016b}\n"
+        f"Hexadecimal: 0x{value:04x}\n"
+        f"Base 10:     {value}"
+    )
+
+
 class ethernetIIHeader:
     """Ethernet II header.
 
@@ -914,21 +979,32 @@ def main(inputFile: str):
 
 
 if __name__=="__main__":
-    # Verify one input file was provided
-    if len(sys.argv) != 2:
-        print(f"Usage: python3 {sys.argv[0]} <input_file>")
-        print(f"Example: python3 {sys.argv[0]} input.txt")
-        raise SystemExit(1)
+    # Process a number conversion request
+    if len(sys.argv) == 3 and sys.argv[1] == "--convert":
+        try:
+            print(formatConversion(sys.argv[2]))
+        except ValueError as error:
+            print(f"Error: {error}")
+            raise SystemExit(1)
 
-    # Process the input file and report file access errors
-    try:
-        main(sys.argv[1])
-    except FileNotFoundError:
-        print(f'Error: File "{sys.argv[1]}" was not found.')
-        raise SystemExit(1)
-    except PermissionError:
-        print(f'Error: Permission denied for file "{sys.argv[1]}".')
-        raise SystemExit(1)
-    except OSError as error:
-        print(f'Error: Could not read file "{sys.argv[1]}": {error}')
+    # Process a packet input file
+    elif len(sys.argv) == 2 and sys.argv[1] != "--convert":
+        try:
+            main(sys.argv[1])
+        except FileNotFoundError:
+            print(f'Error: File "{sys.argv[1]}" was not found.')
+            raise SystemExit(1)
+        except PermissionError:
+            print(f'Error: Permission denied for file "{sys.argv[1]}".')
+            raise SystemExit(1)
+        except OSError as error:
+            print(f'Error: Could not read file "{sys.argv[1]}": {error}')
+            raise SystemExit(1)
+
+    # Display usage when the arguments do not match either operation
+    else:
+        print(f"Usage: python3 {sys.argv[0]} <input_file>")
+        print(f"       python3 {sys.argv[0]} --convert <number>")
+        print(f"Example: python3 {sys.argv[0]} input.txt")
+        print(f"         python3 {sys.argv[0]} --convert 0x002a")
         raise SystemExit(1)
