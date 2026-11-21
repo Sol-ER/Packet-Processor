@@ -1,4 +1,5 @@
 import sys # This import is included in every Python 3 installation so it should work
+import numpy as np
 
 
 # CSCI.351.01 - Data Comm & Networks
@@ -15,6 +16,7 @@ import sys # This import is included in every Python 3 installation so it should
 
 
 MAX_16_BIT_VALUE = 0xffff
+L3_BIN_WIDTH = 250
 
 
 def parseNumber(numberText: str) -> int:
@@ -311,7 +313,7 @@ class arpHeader:
 class ieee8022Header:
     """IEEE 802.2 header.
 
-    This class represents the 802.2 header, it contains the fields 
+    This class represents the 802.2 header, it contains the fields
     related to that area of the frame.
     """
     def __init__(self, payloadLength: int, dsap: int, ssap: int,
@@ -461,7 +463,7 @@ class tcpHeader:
 class message:
     """The cummulative message.
 
-    All the headers involved in a packet. Some may be omitted if they 
+    All the headers involved in a packet. Some may be omitted if they
     are not present.
     """
     def __init__(self, ethernetHeader: ethernetIIHeader, ipHeader=None,
@@ -477,6 +479,166 @@ class message:
         self.packetDescription = packetDescription
         self.timestampSeconds = timestampSeconds
         self.frameLength = frameLength
+
+
+def classifyL2Protocol(msg: message) -> str:
+    """Return the Layer 2 protocol label for a captured message."""
+    eth = msg.ethernetHeader
+    if eth.type <= 1500:
+        if msg.llcHeader is not None:
+            llc_proto = msg.llcHeader.getProtocol()
+            if llc_proto != "Unknown":
+                return f"IEEE 802.3 / LLC ({llc_proto})"
+        return "IEEE 802.3"
+    if eth.type == 0x0800:
+        return "Ethernet II (IPv4)"
+    if eth.type == 0x0806:
+        return "Ethernet II (ARP)"
+    if eth.type == 0x86dd:
+        return "Ethernet II (IPv6)"
+    return f"Ethernet II (0x{eth.type:04x})"
+
+
+def classifyL3Protocol(msg: message) -> str | None:
+    """Return the Layer 3 protocol label, or None if no L3 header exists."""
+    if isinstance(msg.ipHeader, ipv4Header):
+        return "IPv4"
+    if isinstance(msg.ipHeader, ipv6Header):
+        return "IPv6"
+    if msg.arpHeader is not None:
+        return "ARP"
+    return None
+
+
+def classifyL4Protocol(msg: message) -> str | None:
+    """Return the Layer 4 protocol label, or None if not applicable."""
+    if isinstance(msg.ipHeader, ipv4Header):
+        proto_map = {1: "ICMP", 6: "TCP", 17: "UDP"}
+        return proto_map.get(
+            msg.ipHeader.protocol, f"Other IPv4 ({msg.ipHeader.protocol})"
+        )
+    if isinstance(msg.ipHeader, ipv6Header):
+        proto_map = {6: "TCP", 17: "UDP", 58: "ICMPv6"}
+        return proto_map.get(
+            msg.ipHeader.nextHeader,
+            f"Other IPv6 ({msg.ipHeader.nextHeader})",
+        )
+    return None
+
+
+def getL3PacketSize(msg: message) -> int | None:
+    """Return the Layer 3 packet size in bytes, or None if not L3."""
+    if isinstance(msg.ipHeader, ipv4Header):
+        return msg.ipHeader.totalLength
+    if isinstance(msg.ipHeader, ipv6Header):
+        return 40 + msg.ipHeader.payloadLength
+    if msg.arpHeader is not None:
+        arp = msg.arpHeader
+        return 8 + (2 * arp.hardwareLength) + (2 * arp.protocolLength)
+    return None
+
+
+def computeProtocolStats(messages: list[message]) -> dict[str, dict[str, int]]:
+    """Compute packet counts for L2, L3, and L4 protocols."""
+    l2_counts: dict[str, int] = {}
+    l3_counts: dict[str, int] = {}
+    l4_counts: dict[str, int] = {}
+
+    for msg in messages:
+        l2 = classifyL2Protocol(msg)
+        l2_counts[l2] = l2_counts.get(l2, 0) + 1
+
+        l3 = classifyL3Protocol(msg)
+        if l3 is not None:
+            l3_counts[l3] = l3_counts.get(l3, 0) + 1
+
+        l4 = classifyL4Protocol(msg)
+        if l4 is not None:
+            l4_counts[l4] = l4_counts.get(l4, 0) + 1
+
+    return {
+        "L2": dict(sorted(l2_counts.items(), key=lambda x: (-x[1], x[0]))),
+        "L3": dict(sorted(l3_counts.items(), key=lambda x: (-x[1], x[0]))),
+        "L4": dict(sorted(l4_counts.items(), key=lambda x: (-x[1], x[0]))),
+    }
+
+
+def computeL3SizeStats(
+    messages: list[message], binWidth: int = L3_BIN_WIDTH
+) -> tuple[list[tuple[str, int]], int]:
+    """Bin L3 packet sizes into fixed byte increments using numpy."""
+    sizes = [s for msg in messages if (s := getL3PacketSize(msg)) is not None]
+    if not sizes:
+        return [], 0
+
+    arr = np.array(sizes, dtype=np.int64)
+    max_val = int(arr.max())
+    upper_bound = ((max_val // binWidth) + 1) * binWidth
+    edges = np.arange(0, upper_bound + binWidth, binWidth)
+    counts, _ = np.histogram(arr, bins=edges)
+
+    bins: list[tuple[str, int]] = []
+    for i, count in enumerate(counts):
+        low = int(edges[i])
+        high = int(edges[i + 1]) - 1
+        bins.append((f"{low}-{high} B", int(count)))
+
+    return bins, len(sizes)
+
+
+def formatStatisticsReport(messages: list[message]) -> str:
+    """Format protocol counts and 250-byte L3 packet size statistics."""
+    total_packets = len(messages)
+    stats = computeProtocolStats(messages)
+    size_bins, total_l3 = computeL3SizeStats(messages, L3_BIN_WIDTH)
+
+    lines = [
+        "=" * 70,
+        "PACKET & PROTOCOL STATISTICS",
+        "=" * 70,
+        f"Total Captured Frames: {total_packets}",
+        "",
+        "Layer 2 (Data Link) Protocols:",
+    ]
+
+    if stats["L2"]:
+        for proto, count in stats["L2"].items():
+            pct = (count / total_packets * 100) if total_packets else 0.0
+            lines.append(f"  {proto:<32} {count:>6}  ({pct:5.1f}%)")
+    else:
+        lines.append("  None")
+
+    lines.append("")
+    lines.append("Layer 3 (Network) Protocols:")
+    if stats["L3"]:
+        for proto, count in stats["L3"].items():
+            pct = (count / total_packets * 100) if total_packets else 0.0
+            lines.append(f"  {proto:<32} {count:>6}  ({pct:5.1f}%)")
+    else:
+        lines.append("  None")
+
+    lines.append("")
+    lines.append("Layer 4 (Transport) Protocols:")
+    if stats["L4"]:
+        for proto, count in stats["L4"].items():
+            pct = (count / total_packets * 100) if total_packets else 0.0
+            lines.append(f"  {proto:<32} {count:>6}  ({pct:5.1f}%)")
+    else:
+        lines.append("  None")
+
+    lines.append("")
+    lines.append(
+        f"Layer 3 Packet Sizes ({L3_BIN_WIDTH}-byte bins, {total_l3} L3 packets):"
+    )
+    if size_bins:
+        for label, count in size_bins:
+            pct = (count / total_l3 * 100) if total_l3 else 0.0
+            lines.append(f"  {label:<18} {count:>6}  ({pct:5.1f}%)")
+    else:
+        lines.append("  No Layer 3 packets found.")
+
+    lines.append("=" * 70)
+    return "\n".join(lines)
 
 
 def processPacketTimestamp(packetDescription: str) -> float:
@@ -549,7 +711,7 @@ def processIEEE8022Header(data: list[int],
                           payloadLength: int) -> ieee8022Header:
     """Processes the IEEE 802.2 header data.
 
-    Take the data from the input file and payload length and return an 
+    Take the data from the input file and payload length and return an
     instance of the 802.2 header.
 
     Arguments:
@@ -803,7 +965,7 @@ def processProtocolAddress(data: list[int], protocolType: int) -> str:
     """Processes a protocol address.
 
     Take the data from the input file and the protocol type as an
-    integer and return a string representation of a protocol 
+    integer and return a string representation of a protocol
     address.
 
     Arguments:
@@ -882,8 +1044,8 @@ def main(inputFile: str):
     """Given an input file, process the network headers one by one
 
     Given a text file input, read each network packet into the buffer
-    one by one. After parsing, sequentially pop each byte and add it 
-    to its respective header. Once complete, print out the 
+    one by one. After parsing, sequentially pop each byte and add it
+    to its respective header. Once complete, print out the
     information in an orderly fasion.
 
     Arguments:
@@ -974,6 +1136,7 @@ def main(inputFile: str):
             # Incrament to next message
             message_number+=1
 
+    print(formatStatisticsReport(messages))
     return messages
 
 
